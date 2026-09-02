@@ -31,19 +31,46 @@ import java.util.Locale
 
 class MainActivity : Activity() {
 
-    private val BG = Color.parseColor("#101413")
-    private val CARD = Color.parseColor("#171C1A")
-    private val ACC = Color.parseColor("#C6F24E")
-    private val FG = Color.parseColor("#F2F5F1")
-    private val MUTED = Color.parseColor("#7A807B")
-    private val DEEP = Color.parseColor("#0B0D0C")
-    private val HAIR = Color.parseColor("#2A2F2D")
+    private var BG = 0
+    private var CARD = 0
+    private var ACC = 0
+    private var FG = 0
+    private var MUTED = 0
+    private var DEEP = 0
+    private var HAIR = 0
+    private var MAPBG = 0
+    private var FOOT = 0
+
+    private fun applyTheme() {
+        if (store.lightTheme) {
+            BG = Color.parseColor("#F4F6F2")
+            CARD = Color.parseColor("#FFFFFF")
+            ACC = Color.parseColor("#4C7A0B")
+            FG = Color.parseColor("#151A14")
+            MUTED = Color.parseColor("#6B7268")
+            DEEP = Color.parseColor("#FFFFFF")
+            HAIR = Color.parseColor("#DDE1D8")
+            MAPBG = Color.parseColor("#EAEFE4")
+            FOOT = Color.parseColor("#ECEFE8")
+        } else {
+            BG = Color.parseColor("#101413")
+            CARD = Color.parseColor("#171C1A")
+            ACC = Color.parseColor("#C6F24E")
+            FG = Color.parseColor("#F2F5F1")
+            MUTED = Color.parseColor("#7A807B")
+            DEEP = Color.parseColor("#0B0D0C")
+            HAIR = Color.parseColor("#2A2F2D")
+            MAPBG = Color.parseColor("#0D1614")
+            FOOT = Color.parseColor("#0D1110")
+        }
+    }
 
     private lateinit var store: Store
     private lateinit var statusView: TextView
     private lateinit var trackSwitch: Switch
     private lateinit var statRow: LinearLayout
     private lateinit var listBox: LinearLayout
+    private lateinit var mapView: TrackView
 
     private val handler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -62,6 +89,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = Store(this)
+        applyTheme()
         store.rollOverIfNeeded()
         setContentView(buildUi())
         render()
@@ -130,6 +158,17 @@ class MainActivity : Activity() {
         titleBox.addView(statusView)
         header.addView(titleBox)
 
+        val themeBtn = TextView(this)
+        themeBtn.text = if (store.lightTheme) "\u2600" else "\u263D"
+        themeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+        themeBtn.setTextColor(MUTED)
+        themeBtn.setPadding(dp(10), dp(6), dp(14), dp(6))
+        themeBtn.setOnClickListener {
+            store.lightTheme = !store.lightTheme
+            recreate()
+        }
+        header.addView(themeBtn)
+
         trackSwitch = Switch(this)
         trackSwitch.setOnCheckedChangeListener { _, checked ->
             if (checked) askAndStart() else stopTracking()
@@ -151,6 +190,17 @@ class MainActivity : Activity() {
         body.orientation = LinearLayout.VERTICAL
         body.setPadding(0, dp(4), 0, dp(28))
 
+        mapView = TrackView(this)
+        mapView.setColors(ACC, MAPBG, MUTED)
+        val mapLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(210)
+        )
+        mapLp.setMargins(dp(16), dp(12), dp(16), 0)
+        mapView.layoutParams = mapLp
+        mapView.background = card(16)
+        mapView.clipToOutline = true
+        body.addView(mapView)
+
         statRow = LinearLayout(this)
         statRow.orientation = LinearLayout.HORIZONTAL
         statRow.setPadding(dp(16), dp(14), dp(16), dp(6))
@@ -167,7 +217,7 @@ class MainActivity : Activity() {
         val footer = LinearLayout(this)
         footer.orientation = LinearLayout.VERTICAL
         footer.setPadding(dp(16), dp(10), dp(16), dp(18))
-        footer.setBackgroundColor(Color.parseColor("#0D1110"))
+        footer.setBackgroundColor(FOOT)
 
         footer.addView(makeButton("Save today to Excel", ACC, DEEP, true) { exportToday() })
         val gap = View(this)
@@ -200,8 +250,11 @@ class MainActivity : Activity() {
 
     private fun render() {
         val fixes = store.fixes()
-        val stops = Geo.buildStops(fixes, store.places())
+        val stops = Geo.buildStops(fixes, store.allNames())
         val running = store.tracking
+
+        NameLookup.fillMissing(this, store)
+        mapView.setData(fixes, stops)
 
         if (trackSwitch.isChecked != running) {
             trackSwitch.setOnCheckedChangeListener(null)
@@ -231,7 +284,7 @@ class MainActivity : Activity() {
 
         if (stops.isEmpty()) {
             val e = text(
-                "No stops yet. Turn tracking on and stay in one place for three minutes.",
+                "No stops yet. Turn tracking on and stay in one place for three minutes.\nNames fill in on their own.",
                 13f, MUTED
             )
             e.gravity = Gravity.CENTER
@@ -330,7 +383,7 @@ class MainActivity : Activity() {
     private fun nameDialog(s: Stop) {
         val input = EditText(this)
         input.setText(s.name)
-        input.hint = "e.g. Jotun Dammam 2"
+        input.hint = if (s.name.isBlank()) "e.g. Jotun Dammam 2" else s.name
         input.setTextColor(FG)
         input.setPadding(dp(20), dp(16), dp(20), dp(16))
 
@@ -417,7 +470,7 @@ class MainActivity : Activity() {
     // ---------- export ----------
 
     private fun exportToday() {
-        val stops = Geo.buildStops(store.fixes(), store.places())
+        val stops = Geo.buildStops(store.fixes(), store.allNames())
         if (stops.isEmpty()) {
             toast("Nothing recorded today yet.")
             return
@@ -434,7 +487,7 @@ class MainActivity : Activity() {
         for (k in store.dayKeys().sorted()) {
             for (s in store.stopsFor(k)) rows.add(Xlsx.row(k, s))
         }
-        for (s in Geo.buildStops(store.fixes(), store.places())) {
+        for (s in Geo.buildStops(store.fixes(), store.allNames())) {
             rows.add(Xlsx.row(Fmt.today(), s))
         }
         if (rows.size == 1) {

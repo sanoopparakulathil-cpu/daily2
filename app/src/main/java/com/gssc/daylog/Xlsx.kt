@@ -104,7 +104,7 @@ object Xlsx {
     }
 
     val HEADER = listOf<Any>(
-        "Date", "Time in", "Place", "Time out", "Stay", "Distance km", "Latitude", "Longitude"
+        "Date", "Time in", "Place", "Time out", "Stay", "Driven km", "Latitude", "Longitude"
     )
 
     fun row(day: String, s: Stop): List<Any> = listOf(

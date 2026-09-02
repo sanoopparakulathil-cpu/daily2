@@ -54,6 +54,29 @@ class Store(ctx: Context) {
         sp.edit().putString("places", o.toString()).apply()
     }
 
+    // ---- automatic names from the address lookup ----
+    fun autoNames(): MutableMap<String, String> {
+        val m = HashMap<String, String>()
+        val o = JSONObject(sp.getString("auto", "{}"))
+        for (k in o.keys()) m[k] = o.getString(k)
+        return m
+    }
+
+    fun setAuto(key: String, name: String) {
+        val m = autoNames()
+        m[key] = name
+        val o = JSONObject()
+        for ((k, v) in m) o.put(k, v)
+        sp.edit().putString("auto", o.toString()).apply()
+    }
+
+    /** User-typed names win over automatic ones. */
+    fun allNames(): MutableMap<String, String> {
+        val m = autoNames()
+        for ((k, v) in places()) m[k] = v
+        return m
+    }
+
     // ---- archived days ----
     fun days(): JSONObject = JSONObject(sp.getString("days", "{}"))
 
@@ -61,7 +84,7 @@ class Store(ctx: Context) {
 
     fun stopsFor(key: String): List<Stop> {
         val a = days().optJSONArray(key) ?: return emptyList()
-        val names = places()
+        val names = allNames()
         val out = ArrayList<Stop>()
         for (i in 0 until a.length()) {
             val o = a.getJSONObject(i)
@@ -99,9 +122,13 @@ class Store(ctx: Context) {
         if (l.isEmpty()) return
         val k = Fmt.dayKey(l[0].t)
         if (k == Fmt.today()) return
-        archive(k, Geo.buildStops(l, places()))
+        archive(k, Geo.buildStops(l, allNames()))
         saveFixes(emptyList())
     }
+
+    var lightTheme: Boolean
+        get() = sp.getBoolean("light", false)
+        set(v) = sp.edit().putBoolean("light", v).apply()
 
     var tracking: Boolean
         get() = sp.getBoolean("tracking", false)

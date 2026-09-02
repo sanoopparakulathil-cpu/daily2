@@ -74,8 +74,8 @@ class TrackerService : Service() {
     }
 
     private fun requestUpdates() {
-        val req = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 60_000L)
-            .setMinUpdateIntervalMillis(30_000L)
+        val req = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 30_000L)
+            .setMinUpdateIntervalMillis(15_000L)
             .setMinUpdateDistanceMeters(15f)
             .build()
 
@@ -106,7 +106,7 @@ class TrackerService : Service() {
         val prev = list.lastOrNull()
         if (prev != null) {
             if (Fmt.dayKey(prev.t) != Fmt.dayKey(f.t)) {
-                store.archive(Fmt.dayKey(prev.t), Geo.buildStops(list, store.places()))
+                store.archive(Fmt.dayKey(prev.t), Geo.buildStops(list, store.allNames()))
                 store.saveFixes(listOf(f))
                 return
             }
@@ -114,6 +114,7 @@ class TrackerService : Service() {
             if (moved < 8.0 && f.t - prev.t < 45_000L) return
         }
         store.addFix(f)
+        NameLookup.fillMissing(this, store)
     }
 
     override fun onDestroy() {
