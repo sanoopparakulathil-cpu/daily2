@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.location.Location
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.Looper
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -26,6 +27,7 @@ class TrackerService : Service() {
     private lateinit var client: FusedLocationProviderClient
     private lateinit var store: Store
     private var callback: LocationCallback? = null
+    private var wake: PowerManager.WakeLock? = null
 
     companion object {
         const val CHANNEL = "daylog_tracking"
@@ -39,6 +41,13 @@ class TrackerService : Service() {
         store = Store(this)
         client = LocationServices.getFusedLocationProviderClient(this)
         createChannel()
+
+        // Without this the system suspends the CPU between fixes once the
+        // screen has been off a while, and updates dry up to a trickle.
+        val pm = getSystemService(PowerManager::class.java)
+        wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "daylog:tracking")
+        wake?.setReferenceCounted(false)
+        wake?.acquire()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -74,9 +83,10 @@ class TrackerService : Service() {
     }
 
     private fun requestUpdates() {
-        val req = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 30_000L)
+        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 30_000L)
             .setMinUpdateIntervalMillis(15_000L)
             .setMinUpdateDistanceMeters(15f)
+            .setWaitForAccurateLocation(false)
             .build()
 
         val cb = object : LocationCallback() {
@@ -120,6 +130,8 @@ class TrackerService : Service() {
     override fun onDestroy() {
         callback?.let { client.removeLocationUpdates(it) }
         callback = null
+        try { wake?.release() } catch (e: Exception) { }
+        wake = null
         super.onDestroy()
     }
 }

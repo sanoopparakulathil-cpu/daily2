@@ -70,7 +70,7 @@ class MainActivity : Activity() {
     private lateinit var trackSwitch: Switch
     private lateinit var statRow: LinearLayout
     private lateinit var listBox: LinearLayout
-    private lateinit var mapView: TrackView
+    private lateinit var mapView: MapWebView
 
     private val handler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -190,8 +190,7 @@ class MainActivity : Activity() {
         body.orientation = LinearLayout.VERTICAL
         body.setPadding(0, dp(4), 0, dp(28))
 
-        mapView = TrackView(this)
-        mapView.setColors(ACC, MAPBG, MUTED)
+        mapView = MapWebView(this)
         val mapLp = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(210)
         )
@@ -254,7 +253,7 @@ class MainActivity : Activity() {
         val running = store.tracking
 
         NameLookup.fillMissing(this, store)
-        mapView.setData(fixes, stops)
+        mapView.update(fixes, stops, !store.lightTheme)
 
         if (trackSwitch.isChecked != running) {
             trackSwitch.setOnCheckedChangeListener(null)
@@ -458,7 +457,35 @@ class MainActivity : Activity() {
     private fun startTracking() {
         store.tracking = true
         startForegroundService(Intent(this, TrackerService::class.java))
+        askBatteryExemption()
         render()
+    }
+
+    /**
+     * Without this the phone parks the app in Doze after the screen has been
+     * off a while and readings drop to a handful per night.
+     */
+    private fun askBatteryExemption() {
+        try {
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm.isIgnoringBatteryOptimizations(packageName)) return
+            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Stop Android pausing Daylog")
+                .setMessage(
+                    "Android puts apps to sleep when the screen is off, which makes " +
+                        "Daylog miss most of your route. On the next screen choose " +
+                        "Daylog, then Don't optimise."
+                )
+                .setPositiveButton("Open settings") { _, _ ->
+                    startActivity(
+                        Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    )
+                }
+                .setNegativeButton("Later", null)
+                .show()
+        } catch (e: Exception) {
+            // some phones hide this screen; the battery menu still works
+        }
     }
 
     private fun stopTracking() {
