@@ -34,7 +34,7 @@ class MapWebView(ctx: Context) : WebView(ctx) {
         )
     }
 
-    fun update(fixes: List<Fix>, stops: List<Stop>, dark: Boolean) {
+    fun update(fixes: List<Fix>, stops: List<Stop>, dark: Boolean, lineColor: String) {
         val track = StringBuilder("[")
         for ((i, f) in fixes.withIndex()) {
             if (i > 0) track.append(",")
@@ -56,7 +56,7 @@ class MapWebView(ctx: Context) : WebView(ctx) {
         }
         marks.append("]")
 
-        val js = "draw($track,$marks,$dark);"
+        val js = "draw($track,$marks,$dark,'$lineColor');"
         if (ready) evaluateJavascript(js, null) else pending = js
     }
 
@@ -79,18 +79,26 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo
 map.setView([26.40,50.10],10);
 var line=null, layer=L.layerGroup().addTo(map);
 
-function draw(track, stops, dark){
+function draw(track, stops, dark, col){
   document.body.className = dark ? 'dk' : '';
   if(line){ map.removeLayer(line); line=null; }
   layer.clearLayers();
 
   if(track.length > 1){
-    line = L.polyline(track,{color:'#2E7D0E',weight:5,opacity:.9}).addTo(map);
+    line = L.polyline(track,{color:col,weight:5,opacity:.92}).addTo(map);
   }
   stops.forEach(function(s){
-    L.circleMarker([s.la,s.ln],{radius:8,color:'#2E7D0E',weight:3,
+    L.circleMarker([s.la,s.ln],{radius:8,color:col,weight:3,
       fillColor:'#fff',fillOpacity:1}).addTo(layer).bindTooltip(s.t+'<br>'+s.w);
   });
+  // where you are right now, in red
+  if(track.length){
+    var here = track[track.length-1];
+    L.circleMarker(here,{radius:18,color:'#FF2D20',weight:0,
+      fillColor:'#FF2D20',fillOpacity:.18}).addTo(layer);
+    L.circleMarker(here,{radius:7,color:'#fff',weight:2.5,
+      fillColor:'#FF2D20',fillOpacity:1}).addTo(layer).bindTooltip('You are here');
+  }
   if(track.length > 1){
     map.fitBounds(L.polyline(track).getBounds(),{padding:[28,28]});
   } else if(stops.length){

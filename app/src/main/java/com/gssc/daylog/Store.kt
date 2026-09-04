@@ -54,6 +54,49 @@ class Store(ctx: Context) {
         sp.edit().putString("places", o.toString()).apply()
     }
 
+    // ---- sites you have named yourself ----
+    fun sites(): MutableList<Site> {
+        val out = ArrayList<Site>()
+        val a = JSONArray(sp.getString("sites", "[]"))
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            out.add(
+                Site(
+                    o.optLong("id", i.toLong()), o.getString("name"),
+                    o.getDouble("lat"), o.getDouble("lng"), o.optDouble("radius", 500.0)
+                )
+            )
+        }
+        return out
+    }
+
+    fun saveSites(list: List<Site>) {
+        val a = JSONArray()
+        for (s in list) {
+            a.put(
+                JSONObject().put("id", s.id).put("name", s.name)
+                    .put("lat", s.lat).put("lng", s.lng).put("radius", s.radius)
+            )
+        }
+        sp.edit().putString("sites", a.toString()).apply()
+    }
+
+    /** Re-uses an existing site if you are already standing inside one. */
+    fun addSite(name: String, lat: Double, lng: Double, radius: Double = 500.0) {
+        val list = sites()
+        for (s in list) {
+            if (Geo.haversine(lat, lng, s.lat, s.lng) <= s.radius) {
+                s.name = name.trim()
+                saveSites(list)
+                return
+            }
+        }
+        list.add(Site(System.currentTimeMillis(), name.trim(), lat, lng, radius))
+        saveSites(list)
+    }
+
+    fun deleteSite(id: Long) = saveSites(sites().filter { it.id != id })
+
     // ---- automatic names from the address lookup ----
     fun autoNames(): MutableMap<String, String> {
         val m = HashMap<String, String>()
@@ -70,11 +113,29 @@ class Store(ctx: Context) {
         sp.edit().putString("auto", o.toString()).apply()
     }
 
-    /** User-typed names win over automatic ones. */
-    fun allNames(): MutableMap<String, String> {
-        val m = autoNames()
-        for ((k, v) in places()) m[k] = v
-        return m
+    /**
+     * Decides what a set of coordinates is called. A site you named yourself
+     * wins, and it covers everything inside its radius - 500 m by default - so
+     * you only ever have to name a place once. Otherwise the automatic address
+     * is used, and failing that it stays blank.
+     */
+    fun namer(): (Double, Double) -> String {
+        val mine = sites()
+        val auto = autoNames()
+        val typed = places()
+        return { lat, lng ->
+            var best = ""
+            var bestDist = Double.MAX_VALUE
+            for (s in mine) {
+                val d = Geo.haversine(lat, lng, s.lat, s.lng)
+                if (d <= s.radius && d < bestDist) {
+                    bestDist = d
+                    best = s.name
+                }
+            }
+            if (best.isNotBlank()) best
+            else typed[Geo.key(lat, lng)] ?: auto[Geo.key(lat, lng)] ?: ""
+        }
     }
 
     // ---- archived days ----
@@ -84,7 +145,7 @@ class Store(ctx: Context) {
 
     fun stopsFor(key: String): List<Stop> {
         val a = days().optJSONArray(key) ?: return emptyList()
-        val names = allNames()
+        val name = namer()
         val out = ArrayList<Stop>()
         for (i in 0 until a.length()) {
             val o = a.getJSONObject(i)
@@ -94,7 +155,7 @@ class Store(ctx: Context) {
                 Stop(
                     lat, lng, o.getLong("start"), o.getLong("end"),
                     o.optInt("acc", 0), o.optInt("n", 0), o.optDouble("km", 0.0),
-                    names[Geo.key(lat, lng)] ?: ""
+                    name(lat, lng)
                 )
             )
         }
@@ -122,13 +183,13 @@ class Store(ctx: Context) {
         if (l.isEmpty()) return
         val k = Fmt.dayKey(l[0].t)
         if (k == Fmt.today()) return
-        archive(k, Geo.buildStops(l, allNames()))
+        archive(k, Geo.buildStops(l, namer()))
         saveFixes(emptyList())
     }
 
-    var lightTheme: Boolean
-        get() = sp.getBoolean("light", false)
-        set(v) = sp.edit().putBoolean("light", v).apply()
+    var themeIndex: Int
+        get() = sp.getInt("theme", 0)
+        set(v) = sp.edit().putInt("theme", v).apply()
 
     var tracking: Boolean
         get() = sp.getBoolean("tracking", false)

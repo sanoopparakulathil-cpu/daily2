@@ -1,27 +1,41 @@
 package com.gssc.daylog
 
 import android.content.Context
+import android.location.Address
 import android.location.Geocoder
 import java.util.Locale
 
 /**
- * Turns coordinates into a readable place name automatically, using the address
- * book built into Android. No API key. Runs off the main thread.
- * A name the user typed themselves is never overwritten.
+ * Names a stop automatically from the phone's address book.
+ * Always asks for English, and throws away Plus Codes and bare numbers,
+ * which are useless in a report.
  */
 object NameLookup {
 
     private val busy = HashSet<String>()
 
+    // "C4G2+53G" and friends
+    private val plusCode = Regex("^[A-Z0-9]{4,8}\\+[A-Z0-9]{2,4}$", RegexOption.IGNORE_CASE)
+
+    private fun usable(s: String?): Boolean {
+        if (s.isNullOrBlank()) return false
+        val t = s.trim()
+        if (plusCode.matches(t)) return false
+        if (t.count { it.isDigit() } > t.count { it.isLetter() }) return false
+        if (t.none { it.isLetter() }) return false
+        // reject anything not written in the Latin alphabet, so no Arabic
+        if (t.any { it.isLetter() && it.code > 0x24F }) return false
+        return true
+    }
+
     fun fillMissing(ctx: Context, store: Store) {
         if (!Geocoder.isPresent()) return
-
-        val stops = Geo.buildStops(store.fixes(), store.allNames())
-        val known = store.allNames()
+        val name = store.namer()
+        val stops = Geo.buildStops(store.fixes(), name)
 
         for (s in stops) {
+            if (s.name.isNotBlank()) continue
             val key = Geo.key(s.lat, s.lng)
-            if (known.containsKey(key)) continue
             synchronized(busy) {
                 if (busy.contains(key)) return@synchronized
                 busy.add(key)
@@ -32,23 +46,34 @@ object NameLookup {
 
     private fun lookup(ctx: Context, store: Store, key: String, lat: Double, lng: Double) {
         try {
-            val g = Geocoder(ctx, Locale.getDefault())
+            val g = Geocoder(ctx, Locale.ENGLISH)
             @Suppress("DEPRECATION")
             val list = g.getFromLocation(lat, lng, 1)
             if (!list.isNullOrEmpty()) {
-                val a = list[0]
-                val parts = ArrayList<String>()
-                val first = a.featureName ?: a.thoroughfare
-                if (!first.isNullOrBlank() && !first.all { it.isDigit() }) parts.add(first)
-                val area = a.subLocality ?: a.locality ?: a.subAdminArea
-                if (!area.isNullOrBlank() && !parts.contains(area)) parts.add(area)
-                val name = parts.joinToString(", ")
+                val name = compose(list[0])
                 if (name.isNotBlank()) store.setAuto(key, name)
             }
         } catch (e: Exception) {
-            // no network or no address for this spot - leave it unnamed
+            // no network, or nothing on record for this spot
         } finally {
             synchronized(busy) { busy.remove(key) }
         }
+    }
+
+    private fun compose(a: Address): String {
+        val parts = ArrayList<String>()
+        for (c in listOf(a.featureName, a.thoroughfare, a.subLocality)) {
+            if (usable(c) && !parts.contains(c!!.trim())) {
+                parts.add(c.trim())
+                break
+            }
+        }
+        for (c in listOf(a.subLocality, a.locality, a.subAdminArea, a.adminArea)) {
+            if (usable(c) && !parts.contains(c!!.trim())) {
+                parts.add(c.trim())
+                break
+            }
+        }
+        return parts.joinToString(", ")
     }
 }

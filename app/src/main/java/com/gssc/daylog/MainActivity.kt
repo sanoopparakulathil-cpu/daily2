@@ -4,18 +4,22 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentValues
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.MediaStore
+import android.provider.Settings
+import android.text.Editable
 import android.text.TextUtils
+import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -31,67 +35,39 @@ import java.util.Locale
 
 class MainActivity : Activity() {
 
-    private var BG = 0
-    private var CARD = 0
-    private var ACC = 0
-    private var FG = 0
-    private var MUTED = 0
-    private var DEEP = 0
-    private var HAIR = 0
-    private var MAPBG = 0
-    private var FOOT = 0
-
-    private fun applyTheme() {
-        if (store.lightTheme) {
-            BG = Color.parseColor("#F4F6F2")
-            CARD = Color.parseColor("#FFFFFF")
-            ACC = Color.parseColor("#4C7A0B")
-            FG = Color.parseColor("#151A14")
-            MUTED = Color.parseColor("#6B7268")
-            DEEP = Color.parseColor("#FFFFFF")
-            HAIR = Color.parseColor("#DDE1D8")
-            MAPBG = Color.parseColor("#EAEFE4")
-            FOOT = Color.parseColor("#ECEFE8")
-        } else {
-            BG = Color.parseColor("#101413")
-            CARD = Color.parseColor("#171C1A")
-            ACC = Color.parseColor("#C6F24E")
-            FG = Color.parseColor("#F2F5F1")
-            MUTED = Color.parseColor("#7A807B")
-            DEEP = Color.parseColor("#0B0D0C")
-            HAIR = Color.parseColor("#2A2F2D")
-            MAPBG = Color.parseColor("#0D1614")
-            FOOT = Color.parseColor("#0D1110")
-        }
-    }
-
     private lateinit var store: Store
+    private lateinit var p: Palette
+
+    private var BG = 0; private var CARD = 0; private var ACC = 0
+    private var FG = 0; private var MUTED = 0; private var HAIR = 0
+    private var FOOT = 0; private var ONACC = 0
+
     private lateinit var statusView: TextView
     private lateinit var trackSwitch: Switch
-    private lateinit var statRow: LinearLayout
-    private lateinit var listBox: LinearLayout
+    private lateinit var body: LinearLayout
+    private lateinit var navBar: LinearLayout
     private lateinit var mapView: MapWebView
+
+    private var tab = 0                 // 0 today, 1 history, 2 sites
+    private var siteQuery = ""
 
     private val handler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
-        override fun run() {
-            render()
-            handler.postDelayed(this, 15_000L)
-        }
+        override fun run() { render(); handler.postDelayed(this, 15_000L) }
     }
 
     private val REQ_FINE = 10
     private val REQ_BG = 11
     private val REQ_NOTIF = 12
 
-    // ---------- lifecycle ----------
+    // ---------------- lifecycle ----------------
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = Store(this)
         applyTheme()
         store.rollOverIfNeeded()
-        setContentView(buildUi())
+        setContentView(buildShell())
         render()
     }
 
@@ -106,24 +82,28 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    // ---------- ui construction ----------
+    private fun applyTheme() {
+        p = Themes.at(store.themeIndex)
+        BG = Themes.color(p.bg); CARD = Themes.color(p.card); ACC = Themes.color(p.acc)
+        FG = Themes.color(p.fg); MUTED = Themes.color(p.muted); HAIR = Themes.color(p.hair)
+        FOOT = Themes.color(p.foot); ONACC = Themes.color(p.onAcc)
+    }
 
-    private fun dp(v: Int): Int = TypedValue.applyDimension(
+    // ---------------- small builders ----------------
+
+    private fun dp(v: Int) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics
     ).toInt()
 
     private fun card(radius: Int = 14): GradientDrawable {
         val g = GradientDrawable()
-        g.setColor(CARD)
-        g.cornerRadius = dp(radius).toFloat()
-        g.setStroke(dp(1), HAIR)
+        g.setColor(CARD); g.cornerRadius = dp(radius).toFloat(); g.setStroke(dp(1), HAIR)
         return g
     }
 
     private fun pill(fill: Int, stroke: Int): GradientDrawable {
         val g = GradientDrawable()
-        g.setColor(fill)
-        g.cornerRadius = dp(100).toFloat()
+        g.setColor(fill); g.cornerRadius = dp(100).toFloat()
         if (stroke != Color.TRANSPARENT) g.setStroke(dp(1), stroke)
         return g
     }
@@ -133,17 +113,40 @@ class MainActivity : Activity() {
         t.text = s
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
         t.setTextColor(color)
-        if (bold) t.setTypeface(t.typeface, android.graphics.Typeface.BOLD)
+        if (bold) t.setTypeface(t.typeface, Typeface.BOLD)
         return t
     }
 
-    private fun buildUi(): View {
+    private fun wide(v: View, top: Int = 4, bottom: Int = 4): View {
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        lp.setMargins(dp(16), dp(top), dp(16), dp(bottom))
+        v.layoutParams = lp
+        return v
+    }
+
+    private fun makeButton(label: String, solid: Boolean, action: () -> Unit): Button {
+        val b = Button(this)
+        b.text = label
+        b.isAllCaps = false
+        b.setTextColor(if (solid) ONACC else ACC)
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        b.background = if (solid) pill(ACC, Color.TRANSPARENT) else pill(Color.TRANSPARENT, ACC)
+        b.stateListAnimator = null
+        b.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48))
+        b.setOnClickListener { action() }
+        return b
+    }
+
+    // ---------------- shell ----------------
+
+    private fun buildShell(): View {
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
         root.setBackgroundColor(BG)
         root.fitsSystemWindows = true
 
-        // header
         val header = LinearLayout(this)
         header.orientation = LinearLayout.HORIZONTAL
         header.gravity = Gravity.CENTER_VERTICAL
@@ -153,171 +156,234 @@ class MainActivity : Activity() {
         titleBox.orientation = LinearLayout.VERTICAL
         titleBox.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         titleBox.addView(text("Daylog", 21f, FG, true))
-        statusView = text("off - nothing is being recorded", 12f, MUTED)
+        statusView = text("off", 12f, MUTED)
         statusView.setPadding(0, dp(5), 0, 0)
         titleBox.addView(statusView)
         header.addView(titleBox)
 
-        val themeBtn = TextView(this)
-        themeBtn.text = if (store.lightTheme) "\u2600" else "\u263D"
-        themeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-        themeBtn.setTextColor(MUTED)
+        val themeBtn = text("\u25D0", 20f, MUTED)
         themeBtn.setPadding(dp(10), dp(6), dp(14), dp(6))
-        themeBtn.setOnClickListener {
-            store.lightTheme = !store.lightTheme
-            recreate()
-        }
+        themeBtn.setOnClickListener { pickTheme() }
         header.addView(themeBtn)
 
         trackSwitch = Switch(this)
-        trackSwitch.setOnCheckedChangeListener { _, checked ->
-            if (checked) askAndStart() else stopTracking()
-        }
+        trackSwitch.setOnCheckedChangeListener { _, c -> if (c) askAndStart() else stopTracking() }
         header.addView(trackSwitch)
         root.addView(header)
 
-        val divider = View(this)
-        divider.setBackgroundColor(HAIR)
-        divider.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
-        root.addView(divider)
+        val hr = View(this)
+        hr.setBackgroundColor(HAIR)
+        hr.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
+        root.addView(hr)
 
-        // scroll body
         val scroll = ScrollView(this)
-        scroll.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-        )
-        val body = LinearLayout(this)
+        scroll.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        scroll.isFillViewport = true
+        body = LinearLayout(this)
         body.orientation = LinearLayout.VERTICAL
-        body.setPadding(0, dp(4), 0, dp(28))
-
-        mapView = MapWebView(this)
-        val mapLp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(210)
-        )
-        mapLp.setMargins(dp(16), dp(12), dp(16), 0)
-        mapView.layoutParams = mapLp
-        mapView.background = card(16)
-        mapView.clipToOutline = true
-        body.addView(mapView)
-
-        statRow = LinearLayout(this)
-        statRow.orientation = LinearLayout.HORIZONTAL
-        statRow.setPadding(dp(16), dp(14), dp(16), dp(6))
-        body.addView(statRow)
-
-        listBox = LinearLayout(this)
-        listBox.orientation = LinearLayout.VERTICAL
-        body.addView(listBox)
-
+        body.setPadding(0, dp(4), 0, dp(24))
         scroll.addView(body)
         root.addView(scroll)
 
-        // footer buttons
-        val footer = LinearLayout(this)
-        footer.orientation = LinearLayout.VERTICAL
-        footer.setPadding(dp(16), dp(10), dp(16), dp(18))
-        footer.setBackgroundColor(FOOT)
+        mapView = MapWebView(this)
 
-        footer.addView(makeButton("Save today to Excel", ACC, DEEP, true) { exportToday() })
-        val gap = View(this)
-        gap.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10))
-        footer.addView(gap)
-        footer.addView(makeButton("Save full history", Color.TRANSPARENT, ACC, false) { exportAll() })
-        root.addView(footer)
+        navBar = LinearLayout(this)
+        navBar.orientation = LinearLayout.HORIZONTAL
+        navBar.setBackgroundColor(FOOT)
+        navBar.setPadding(0, dp(8), 0, dp(12))
+        root.addView(navBar)
 
         return root
     }
 
-    private fun makeButton(
-        label: String, fill: Int, textColor: Int, solid: Boolean, action: () -> Unit
-    ): Button {
-        val b = Button(this)
-        b.text = label
-        b.isAllCaps = false
-        b.setTextColor(textColor)
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-        b.background = pill(fill, if (solid) Color.TRANSPARENT else ACC)
-        b.stateListAnimator = null
-        b.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-        )
-        b.setOnClickListener { action() }
-        return b
+    private fun navButton(label: String, index: Int): View {
+        val t = text(label, 12.5f, if (tab == index) ACC else MUTED, tab == index)
+        t.gravity = Gravity.CENTER
+        t.setPadding(0, dp(8), 0, dp(8))
+        t.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        t.setOnClickListener { tab = index; render() }
+        return t
     }
 
-    // ---------- rendering ----------
+    // ---------------- render ----------------
 
     private fun render() {
+        val name = store.namer()
         val fixes = store.fixes()
-        val stops = Geo.buildStops(fixes, store.allNames())
+        val stops = Geo.buildStops(fixes, name)
         val running = store.tracking
 
         NameLookup.fillMissing(this, store)
-        mapView.update(fixes, stops, !store.lightTheme)
 
         if (trackSwitch.isChecked != running) {
             trackSwitch.setOnCheckedChangeListener(null)
             trackSwitch.isChecked = running
-            trackSwitch.setOnCheckedChangeListener { _, checked ->
-                if (checked) askAndStart() else stopTracking()
-            }
+            trackSwitch.setOnCheckedChangeListener { _, c -> if (c) askAndStart() else stopTracking() }
         }
 
         val elapsed = if (fixes.isEmpty()) "0m"
         else Fmt.dur(System.currentTimeMillis() - fixes[0].t)
+        statusView.text =
+            if (running) "recording - ${fixes.size} fixes - $elapsed" else "off"
 
-        statusView.text = if (running)
-            "recording - ${fixes.size} fixes - $elapsed"
-        else
-            "off - nothing is being recorded"
+        navBar.removeAllViews()
+        navBar.addView(navButton("Today", 0))
+        navBar.addView(navButton("History", 1))
+        navBar.addView(navButton("Sites", 2))
 
-        // stats
-        statRow.removeAllViews()
-        statRow.addView(statCard(String.format(Locale.US, "%.1f", Geo.dayKm(fixes)), "km today", ACC))
-        statRow.addView(statCard(stops.size.toString(), "stops", FG))
-        statRow.addView(statCard(elapsed, "tracked", FG))
+        (mapView.parent as? ViewGroup)?.removeView(mapView)
+        body.removeAllViews()
 
-        // stop list
-        listBox.removeAllViews()
-        listBox.addView(sectionLabel("Today  " + Fmt.today()))
+        when (tab) {
+            0 -> renderToday(fixes, stops, elapsed)
+            1 -> renderHistory()
+            2 -> renderSites()
+        }
+    }
 
+    private fun renderToday(fixes: List<Fix>, stops: List<Stop>, elapsed: String) {
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230))
+        lp.setMargins(dp(16), dp(12), dp(16), 0)
+        mapView.layoutParams = lp
+        mapView.background = card(16)
+        mapView.clipToOutline = true
+        body.addView(mapView)
+        mapView.update(fixes, stops, p.darkTiles, p.acc)
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(dp(16), dp(14), dp(16), dp(6))
+        row.addView(statCard(String.format(Locale.US, "%.1f", Geo.dayKm(fixes)), "km today", ACC))
+        row.addView(statCard(stops.size.toString(), "stops", FG))
+        row.addView(statCard(elapsed, "tracked", FG))
+        body.addView(row)
+
+        body.addView(sectionLabel("Today  " + Fmt.today()))
         if (stops.isEmpty()) {
-            val e = text(
-                "No stops yet. Turn tracking on and stay in one place for three minutes.\nNames fill in on their own.",
-                13f, MUTED
-            )
-            e.gravity = Gravity.CENTER
-            e.setPadding(dp(28), dp(26), dp(28), dp(26))
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.setMargins(dp(16), dp(4), dp(16), dp(4))
-            e.layoutParams = lp
-            e.background = card(16)
-            listBox.addView(e)
+            body.addView(emptyBox("No stops yet. Stay somewhere three minutes and it appears here."))
         } else {
-            for (s in stops) listBox.addView(stopRow(s, true))
+            for (s in stops) body.addView(stopRow(s, true))
         }
 
-        // history
+        body.addView(spacer(10))
+        body.addView(wide(makeButton("Save today to Excel", true) { exportToday() }))
+    }
+
+    private fun renderHistory() {
         val keys = store.dayKeys()
-        if (keys.isNotEmpty()) {
-            listBox.addView(sectionLabel("Earlier days"))
+        if (keys.isEmpty()) {
+            body.addView(sectionLabel("Earlier days"))
+            body.addView(emptyBox("Nothing here yet. Each day moves across after midnight."))
+        } else {
             for (k in keys) {
                 val list = store.stopsFor(k)
                 val total = list.sumOf { it.km }
-                listBox.addView(
-                    sectionLabel(
-                        "$k   ${list.size} stops - " + String.format(Locale.US, "%.1f km", total)
-                    )
+                body.addView(
+                    sectionLabel(k + "   " + list.size + " stops - " +
+                        String.format(Locale.US, "%.1f km", total))
                 )
-                for (s in list) listBox.addView(stopRow(s, false))
+                for (s in list) body.addView(stopRow(s, false))
             }
         }
+        body.addView(spacer(10))
+        body.addView(wide(makeButton("Save full history", true) { exportAll() }))
+    }
+
+    private fun renderSites() {
+        val search = EditText(this)
+        search.hint = "Search sites"
+        search.setText(siteQuery)
+        search.setSingleLine()
+        search.setTextColor(FG)
+        search.setHintTextColor(MUTED)
+        search.background = card(12)
+        search.setPadding(dp(14), dp(12), dp(14), dp(12))
+        body.addView(wide(search, 12, 4))
+
+        val listBox = LinearLayout(this)
+        listBox.orientation = LinearLayout.VERTICAL
+        body.addView(listBox)
+        fillSiteList(listBox)
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) {
+                siteQuery = s?.toString() ?: ""
+                fillSiteList(listBox)
+            }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        })
+
+        body.addView(spacer(10))
+        body.addView(wide(makeButton("Add site at my location", true) { addSiteHere() }))
+        body.addView(wide(makeButton("Import sites from file", false) { importSites() }))
+        body.addView(
+            wide(text(
+                "A site covers 500 m. Stop anywhere inside it and Daylog uses that " +
+                    "name by itself. Import file: one line per site, name,latitude,longitude",
+                12f, MUTED
+            ), 8, 8)
+        )
+    }
+
+    private fun fillSiteList(box: LinearLayout) {
+        box.removeAllViews()
+        val q = siteQuery.trim().lowercase(Locale.US)
+        val list = store.sites()
+            .filter { q.isEmpty() || it.name.lowercase(Locale.US).contains(q) }
+            .sortedBy { it.name.lowercase(Locale.US) }
+
+        if (list.isEmpty()) {
+            box.addView(emptyBox(
+                if (store.sites().isEmpty()) "No sites yet. Add one while you are standing there."
+                else "Nothing matches that search."
+            ))
+            return
+        }
+        for (s in list) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.background = card(14)
+            row.setPadding(dp(14), dp(13), dp(15), dp(13))
+
+            val mid = LinearLayout(this)
+            mid.orientation = LinearLayout.VERTICAL
+            mid.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            mid.addView(text(s.name, 15f, FG, true))
+            mid.addView(text(
+                String.format(Locale.US, "%.4f, %.4f  -  %.0f m", s.lat, s.lng, s.radius),
+                11.5f, MUTED
+            ))
+            row.addView(mid)
+
+            val del = text("\u2715", 16f, MUTED)
+            del.setPadding(dp(12), dp(4), dp(4), dp(4))
+            del.setOnClickListener { confirmDelete(s, box) }
+            row.addView(del)
+
+            row.setOnClickListener { editSite(s, box) }
+            box.addView(wide(row))
+        }
+    }
+
+    private fun spacer(h: Int): View {
+        val v = View(this)
+        v.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(h))
+        return v
     }
 
     private fun sectionLabel(s: String): TextView {
         val t = text(s, 11.5f, MUTED)
         t.setPadding(dp(20), dp(18), dp(20), dp(8))
         return t
+    }
+
+    private fun emptyBox(msg: String): View {
+        val e = text(msg, 13f, MUTED)
+        e.gravity = Gravity.CENTER
+        e.setPadding(dp(24), dp(26), dp(24), dp(26))
+        e.background = card(16)
+        return wide(e)
     }
 
     private fun statCard(value: String, label: String, valueColor: Int): View {
@@ -340,11 +406,6 @@ class MainActivity : Activity() {
         row.orientation = LinearLayout.HORIZONTAL
         row.background = card(14)
         row.setPadding(dp(14), dp(14), dp(15), dp(14))
-        val lp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        lp.setMargins(dp(16), dp(4), dp(16), dp(4))
-        row.layoutParams = lp
 
         val time = text(Fmt.hhmm(s.start), 13f, ACC, true)
         time.layoutParams = LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -376,43 +437,166 @@ class MainActivity : Activity() {
         row.addView(right)
 
         if (editable) row.setOnClickListener { nameDialog(s) }
-        return row
+        return wide(row)
     }
 
-    private fun nameDialog(s: Stop) {
-        val input = EditText(this)
-        input.setText(s.name)
-        input.hint = if (s.name.isBlank()) "e.g. Jotun Dammam 2" else s.name
-        input.setTextColor(FG)
-        input.setPadding(dp(20), dp(16), dp(20), dp(16))
+    // ---------------- dialogs ----------------
 
-        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+    private fun styledInput(value: String, hint: String): EditText {
+        val i = EditText(this)
+        i.setText(value)
+        i.hint = hint
+        i.setSingleLine()
+        i.setTextColor(FG)
+        i.setPadding(dp(20), dp(16), dp(20), dp(16))
+        return i
+    }
+
+    private fun dialog() = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+
+    private fun pickTheme() {
+        val names = Themes.all.map { it.title }.toTypedArray()
+        dialog()
+            .setTitle("Theme")
+            .setSingleChoiceItems(names, store.themeIndex) { d, which ->
+                store.themeIndex = which
+                d.dismiss()
+                recreate()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Naming a stop creates a 500 m site, so the name sticks next time. */
+    private fun nameDialog(s: Stop) {
+        val input = styledInput(s.name, "e.g. Jotun Dammam 2")
+        dialog()
             .setTitle("Name this place")
             .setMessage(
                 Fmt.hhmm(s.start) + " - " + Fmt.hhmm(s.end) + "\n" +
-                    String.format(Locale.US, "%.4f, %.4f", s.lat, s.lng)
+                    String.format(Locale.US, "%.4f, %.4f", s.lat, s.lng) +
+                    "\nSaved as a site covering 500 m."
             )
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
-                store.setPlace(Geo.key(s.lat, s.lng), input.text.toString())
+                val v = input.text.toString().trim()
+                if (v.isNotBlank()) store.addSite(v, s.lat, s.lng)
                 render()
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    // ---------- permissions and service ----------
+    private fun editSite(s: Site, box: LinearLayout) {
+        val input = styledInput(s.name, "Site name")
+        dialog()
+            .setTitle("Rename site")
+            .setMessage(String.format(Locale.US, "%.4f, %.4f", s.lat, s.lng))
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val v = input.text.toString().trim()
+                if (v.isNotBlank()) {
+                    val list = store.sites()
+                    list.firstOrNull { it.id == s.id }?.name = v
+                    store.saveSites(list)
+                    fillSiteList(box)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
-    private fun has(p: String) =
-        checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
+    private fun confirmDelete(s: Site, box: LinearLayout) {
+        dialog()
+            .setTitle("Remove ${s.name}?")
+            .setMessage("Stops already recorded keep the name. New ones will not use it.")
+            .setPositiveButton("Remove") { _, _ ->
+                store.deleteSite(s.id)
+                fillSiteList(box)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun addSiteHere() {
+        val fixes = store.fixes()
+        if (fixes.isEmpty()) {
+            toast("No location yet. Turn tracking on first.")
+            return
+        }
+        val last = fixes[fixes.size - 1]
+        val input = styledInput("", "Site name")
+        dialog()
+            .setTitle("Add site here")
+            .setMessage(
+                String.format(Locale.US, "%.4f, %.4f", last.lat, last.lng) +
+                    "\nCovers 500 m around this point."
+            )
+            .setView(input)
+            .setPositiveButton("Add") { _, _ ->
+                val v = input.text.toString().trim()
+                if (v.isNotBlank()) {
+                    store.addSite(v, last.lat, last.lng)
+                    render()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------------- site import ----------------
+
+    private val REQ_IMPORT = 20
+
+    private fun importSites() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "*/*"
+        try {
+            startActivityForResult(i, REQ_IMPORT)
+        } catch (e: Exception) {
+            toast("No file picker on this phone.")
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_IMPORT || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        var added = 0
+        var skipped = 0
+        try {
+            contentResolver.openInputStream(uri)?.bufferedReader()?.useLines { lines ->
+                for (raw in lines) {
+                    val line = raw.trim()
+                    if (line.isEmpty()) continue
+                    val parts = line.split(",")
+                    if (parts.size < 3) { skipped++; continue }
+                    val lat = parts[parts.size - 2].trim().toDoubleOrNull()
+                    val lng = parts[parts.size - 1].trim().toDoubleOrNull()
+                    val nm = parts.subList(0, parts.size - 2).joinToString(",").trim()
+                    if (lat == null || lng == null || nm.isBlank()) { skipped++; continue }
+                    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) { skipped++; continue }
+                    store.addSite(nm, lat, lng)
+                    added++
+                }
+            }
+            toast("$added sites added" + if (skipped > 0) ", $skipped lines skipped" else "")
+            render()
+        } catch (e: Exception) {
+            toast("Could not read that file.")
+        }
+    }
+
+    // ---------------- permissions ----------------
+
+    private fun has(perm: String) = checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
 
     private fun askAndStart() {
         if (!has(Manifest.permission.ACCESS_FINE_LOCATION)) {
             requestPermissions(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                ), REQ_FINE
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION), REQ_FINE
             )
             return
         }
@@ -421,16 +605,14 @@ class MainActivity : Activity() {
             return
         }
         if (!has(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
-            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            dialog()
                 .setTitle("Allow all the time")
                 .setMessage(
-                    "Daylog needs location access set to \"Allow all the time\" so it keeps " +
-                        "recording when your screen is off. On the next screen choose that option."
+                    "Daylog needs location set to \"Allow all the time\" so it keeps " +
+                        "recording when the screen is off. Choose that on the next screen."
                 )
                 .setPositiveButton("Continue") { _, _ ->
-                    requestPermissions(
-                        arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), REQ_BG
-                    )
+                    requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), REQ_BG)
                 }
                 .setNegativeButton("Not now") { _, _ -> startTracking() }
                 .show()
@@ -454,38 +636,31 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun askBatteryExemption() {
+        try {
+            val pm = getSystemService(PowerManager::class.java)
+            if (pm.isIgnoringBatteryOptimizations(packageName)) return
+            dialog()
+                .setTitle("Stop Android pausing Daylog")
+                .setMessage(
+                    "Android sleeps apps when the screen is off, which makes Daylog " +
+                        "miss most of your route. On the next screen pick Daylog, " +
+                        "then Don't optimise."
+                )
+                .setPositiveButton("Open settings") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
+                .setNegativeButton("Later", null)
+                .show()
+        } catch (e: Exception) {
+        }
+    }
+
     private fun startTracking() {
         store.tracking = true
         startForegroundService(Intent(this, TrackerService::class.java))
         askBatteryExemption()
         render()
-    }
-
-    /**
-     * Without this the phone parks the app in Doze after the screen has been
-     * off a while and readings drop to a handful per night.
-     */
-    private fun askBatteryExemption() {
-        try {
-            val pm = getSystemService(android.os.PowerManager::class.java)
-            if (pm.isIgnoringBatteryOptimizations(packageName)) return
-            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("Stop Android pausing Daylog")
-                .setMessage(
-                    "Android puts apps to sleep when the screen is off, which makes " +
-                        "Daylog miss most of your route. On the next screen choose " +
-                        "Daylog, then Don't optimise."
-                )
-                .setPositiveButton("Open settings") { _, _ ->
-                    startActivity(
-                        Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                    )
-                }
-                .setNegativeButton("Later", null)
-                .show()
-        } catch (e: Exception) {
-            // some phones hide this screen; the battery menu still works
-        }
     }
 
     private fun stopTracking() {
@@ -494,14 +669,11 @@ class MainActivity : Activity() {
         render()
     }
 
-    // ---------- export ----------
+    // ---------------- export ----------------
 
     private fun exportToday() {
-        val stops = Geo.buildStops(store.fixes(), store.allNames())
-        if (stops.isEmpty()) {
-            toast("Nothing recorded today yet.")
-            return
-        }
+        val stops = Geo.buildStops(store.fixes(), store.namer())
+        if (stops.isEmpty()) { toast("Nothing recorded today yet."); return }
         val rows = ArrayList<List<Any>>()
         rows.add(Xlsx.HEADER)
         for (s in stops) rows.add(Xlsx.row(Fmt.today(), s))
@@ -514,13 +686,10 @@ class MainActivity : Activity() {
         for (k in store.dayKeys().sorted()) {
             for (s in store.stopsFor(k)) rows.add(Xlsx.row(k, s))
         }
-        for (s in Geo.buildStops(store.fixes(), store.allNames())) {
+        for (s in Geo.buildStops(store.fixes(), store.namer())) {
             rows.add(Xlsx.row(Fmt.today(), s))
         }
-        if (rows.size == 1) {
-            toast("No history saved yet.")
-            return
-        }
+        if (rows.size == 1) { toast("No history saved yet."); return }
         write(Xlsx.build(rows, "Daylog history"), "daylog_history.xlsx")
     }
 
@@ -537,13 +706,10 @@ class MainActivity : Activity() {
                 Environment.DIRECTORY_DOWNLOADS + "/Daylog"
             )
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            if (uri == null) {
-                toast("Could not create the file.")
-                return
-            }
+            if (uri == null) { toast("Could not create the file."); return }
             contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
 
-            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            dialog()
                 .setTitle("Saved")
                 .setMessage("Downloads/Daylog/$filename")
                 .setPositiveButton("Share") { _, _ ->

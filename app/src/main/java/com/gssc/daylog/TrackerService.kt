@@ -116,7 +116,7 @@ class TrackerService : Service() {
         val prev = list.lastOrNull()
         if (prev != null) {
             if (Fmt.dayKey(prev.t) != Fmt.dayKey(f.t)) {
-                store.archive(Fmt.dayKey(prev.t), Geo.buildStops(list, store.allNames()))
+                store.archive(Fmt.dayKey(prev.t), Geo.buildStops(list, store.namer()))
                 store.saveFixes(listOf(f))
                 return
             }

@@ -13,6 +13,15 @@ import kotlin.math.sqrt
 data class Fix(val t: Long, val lat: Double, val lng: Double, val acc: Int)
 
 /** A place the user actually stayed. */
+/** A place you told Daylog about. Anything within [radius] metres is this site. */
+data class Site(
+    val id: Long,
+    var name: String,
+    var lat: Double,
+    var lng: Double,
+    var radius: Double = 500.0
+)
+
 data class Stop(
     var lat: Double,
     var lng: Double,
@@ -58,7 +67,7 @@ object Geo {
      * Anchor stays fixed for the life of a cluster. Comparing against a drifting
      * mean lets a slow walk merge into one giant "stop".
      */
-    fun buildStops(fixes: List<Fix>, places: Map<String, String>): List<Stop> {
+    fun buildStops(fixes: List<Fix>, namer: (Double, Double) -> String): List<Stop> {
         if (fixes.isEmpty()) return emptyList()
 
         // Group readings into circles. The anchor is the first reading of the
@@ -113,7 +122,7 @@ object Geo {
             // leaving the last stop and arriving at this one, not a straight line.
             val from = if (i == 0) 0 else stops[i - 1].toIdx
             s.km = trackKm(fixes, from, s.fromIdx)
-            s.name = places[key(s.lat, s.lng)] ?: ""
+            s.name = namer(s.lat, s.lng)
         }
         return stops
     }
