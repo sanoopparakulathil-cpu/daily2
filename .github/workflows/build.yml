@@ -26,6 +26,24 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Make one permanent signing key
+        run: |
+          if [ ! -f app/daylog.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore app/daylog.keystore \
+              -storepass daylog -keypass daylog -alias daylog \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Daylog, OU=GSSC, O=GSSC, L=Dammam, C=SA"
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add -f app/daylog.keystore
+            git commit -m "Add permanent signing key"
+            git push
+            echo "Created and saved a new signing key."
+          else
+            echo "Signing key already present."
+          fi
+
       - name: Accept Android SDK licences
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
