@@ -11,11 +11,27 @@ android {
         applicationId = "com.gssc.daylog"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 9
+        versionName = "1.8"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            // A fixed key kept in the repo, so every build signs the same way
+            // and Android will install one APK over another.
+            val ks = rootProject.file("app/daylog.keystore")
+            if (ks.exists()) {
+                storeFile = ks
+                storeType = "PKCS12"
+                storePassword = "daylog"
+                keyAlias = "daylog"
+                keyPassword = "daylog"
+            }
+        }
     }
 
     buildTypes {
+        debug { signingConfig = signingConfigs.getByName("debug") }
         release { isMinifyEnabled = false }
     }
     compileOptions {
