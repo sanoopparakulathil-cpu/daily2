@@ -19,7 +19,9 @@ data class Site(
     var name: String,
     var lat: Double,
     var lng: Double,
-    var radius: Double = 500.0
+    var radius: Double = 150.0,
+    /** False until you have stood there once and pinned it to a coordinate. */
+    var pinned: Boolean = true
 )
 
 data class Stop(

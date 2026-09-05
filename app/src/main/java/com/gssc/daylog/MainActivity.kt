@@ -399,8 +399,10 @@ class MainActivity : Activity() {
         val q = siteQuery.trim().lowercase(Locale.US)
         val list = store.sites()
             .filter { q.isEmpty() || it.name.lowercase(Locale.US).contains(q) }
-            .sortedWith(compareByDescending<Site> { it.pinned }
-                .thenBy { it.name.lowercase(Locale.US) })
+            .sortedWith(
+                compareBy<Site> { if (it.pinned) 0 else 1 }
+                    .thenBy { it.name.lowercase(Locale.US) }
+            )
 
         if (list.isEmpty()) {
             box.addView(emptyBox(
