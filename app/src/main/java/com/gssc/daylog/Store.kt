@@ -63,7 +63,8 @@ class Store(ctx: Context) {
             out.add(
                 Site(
                     o.optLong("id", i.toLong()), o.getString("name"),
-                    o.getDouble("lat"), o.getDouble("lng"), o.optDouble("radius", 500.0)
+                    o.getDouble("lat"), o.getDouble("lng"),
+                    o.optDouble("radius", 150.0), o.optBoolean("pinned", true)
                 )
             )
         }
@@ -75,25 +76,50 @@ class Store(ctx: Context) {
         for (s in list) {
             a.put(
                 JSONObject().put("id", s.id).put("name", s.name)
-                    .put("lat", s.lat).put("lng", s.lng).put("radius", s.radius)
+                    .put("lat", s.lat).put("lng", s.lng)
+                    .put("radius", s.radius).put("pinned", s.pinned)
             )
         }
         sp.edit().putString("sites", a.toString()).apply()
     }
 
     /** Re-uses an existing site if you are already standing inside one. */
-    fun addSite(name: String, lat: Double, lng: Double, radius: Double = 500.0) {
+    fun addSite(name: String, lat: Double, lng: Double, radius: Double = 150.0) {
         val list = sites()
+        val clean = name.trim()
+
+        // already standing inside a pinned site - just rename that one
         for (s in list) {
-            if (Geo.haversine(lat, lng, s.lat, s.lng) <= s.radius) {
-                s.name = name.trim()
+            if (s.pinned && Geo.haversine(lat, lng, s.lat, s.lng) <= s.radius) {
+                s.name = clean
                 saveSites(list)
                 return
             }
         }
-        list.add(Site(System.currentTimeMillis(), name.trim(), lat, lng, radius))
+        // an imported name waiting for a coordinate - pin it here
+        val waiting = list.firstOrNull { !it.pinned && it.name.equals(clean, true) }
+        if (waiting != null) {
+            waiting.lat = lat; waiting.lng = lng
+            waiting.radius = radius; waiting.pinned = true
+            saveSites(list)
+            return
+        }
+        list.add(Site(System.currentTimeMillis(), clean, lat, lng, radius))
         saveSites(list)
     }
+
+    /** A site name imported from a list, with no coordinate yet. */
+    fun addPending(name: String): Boolean {
+        val clean = name.trim()
+        if (clean.isBlank()) return false
+        val list = sites()
+        if (list.any { it.name.equals(clean, true) }) return false
+        list.add(Site(System.currentTimeMillis() + list.size, clean, 0.0, 0.0, 150.0, false))
+        saveSites(list)
+        return true
+    }
+
+    fun pending(): List<Site> = sites().filter { !it.pinned }
 
     fun deleteSite(id: Long) = saveSites(sites().filter { it.id != id })
 
@@ -127,6 +153,7 @@ class Store(ctx: Context) {
             var best = ""
             var bestDist = Double.MAX_VALUE
             for (s in mine) {
+                if (!s.pinned) continue
                 val d = Geo.haversine(lat, lng, s.lat, s.lng)
                 if (d <= s.radius && d < bestDist) {
                     bestDist = d
@@ -161,6 +188,14 @@ class Store(ctx: Context) {
         }
         return out
     }
+
+    fun putDays(all: JSONObject) {
+        sp.edit().putString("days", all.toString()).apply()
+    }
+
+    var lastBackup: Long
+        get() = sp.getLong("lastBackup", 0L)
+        set(v) = sp.edit().putLong("lastBackup", v).apply()
 
     fun archive(key: String, stops: List<Stop>) {
         if (stops.isEmpty()) return

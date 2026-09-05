@@ -74,6 +74,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         store.rollOverIfNeeded()
+        autoBackup()
         handler.post(ticker)
     }
 
@@ -287,6 +288,70 @@ class MainActivity : Activity() {
         }
         body.addView(spacer(10))
         body.addView(wide(makeButton("Save full history", true) { exportAll() }))
+        body.addView(wide(makeButton("Back up to Drive", false) { backupNow() }))
+        body.addView(wide(makeButton("Restore from backup", false) { pickRestore() }))
+
+        val last = store.lastBackup
+        body.addView(
+            wide(text(
+                (if (last == 0L) "No backup file written yet."
+                else "Last backup file: " + Fmt.dayKey(last) + " " + Fmt.hhmm(last)) +
+                    "\n\nA copy is written to Downloads/Daylog/Backups once a day by " +
+                    "itself. Back up to Drive sends the newest one to Google Drive, " +
+                    "or anywhere else you pick.",
+                11.5f, MUTED
+            ), 8, 8)
+        )
+    }
+
+    // ---------------- backup ----------------
+
+    private fun backupFileName() = "daylog_backup_" + Fmt.today() + ".json"
+
+    /** Writes one snapshot a day into Downloads, keeping it out of your way. */
+    private fun autoBackup() {
+        val now = System.currentTimeMillis()
+        if (now - store.lastBackup < 20 * 60 * 60 * 1000L) return
+        if (store.fixes().isEmpty() && store.dayKeys().isEmpty()) return
+        try {
+            writeFile(
+                Backup.toJson(store).toByteArray(Charsets.UTF_8),
+                backupFileName(), "application/json", "Backups"
+            )
+            store.lastBackup = now
+        } catch (e: Exception) {
+            // out of space or storage busy - try again next time
+        }
+    }
+
+    private fun backupNow() {
+        try {
+            val uri = writeFile(
+                Backup.toJson(store).toByteArray(Charsets.UTF_8),
+                backupFileName(), "application/json", "Backups"
+            ) ?: run { toast("Could not write the backup."); return }
+            store.lastBackup = System.currentTimeMillis()
+
+            val send = Intent(Intent.ACTION_SEND)
+            send.type = "application/json"
+            send.putExtra(Intent.EXTRA_STREAM, uri)
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(send, "Save backup to"))
+            render()
+        } catch (e: Exception) {
+            toast("Backup failed: " + e.message)
+        }
+    }
+
+    private fun pickRestore() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "*/*"
+        try {
+            startActivityForResult(i, REQ_RESTORE)
+        } catch (e: Exception) {
+            toast("No file picker on this phone.")
+        }
     }
 
     private fun renderSites() {
@@ -319,8 +384,11 @@ class MainActivity : Activity() {
         body.addView(wide(makeButton("Import sites from file", false) { importSites() }))
         body.addView(
             wide(text(
-                "A site covers 500 m. Stop anywhere inside it and Daylog uses that " +
-                    "name by itself. Import file: one line per site, name,latitude,longitude",
+                "A site covers 150 m by default - tap one to rename it or widen the " +
+                    "radius for a big plant. Stop anywhere inside it and Daylog uses that " +
+                    "name by itself.\n\nImport file: one site per line. Either just the " +
+                    "name, or name,latitude,longitude. Names imported without coordinates " +
+                    "wait in this list until you visit and pin them.",
                 12f, MUTED
             ), 8, 8)
         )
@@ -331,7 +399,8 @@ class MainActivity : Activity() {
         val q = siteQuery.trim().lowercase(Locale.US)
         val list = store.sites()
             .filter { q.isEmpty() || it.name.lowercase(Locale.US).contains(q) }
-            .sortedBy { it.name.lowercase(Locale.US) }
+            .sortedWith(compareByDescending<Site> { it.pinned }
+                .thenBy { it.name.lowercase(Locale.US) })
 
         if (list.isEmpty()) {
             box.addView(emptyBox(
@@ -349,9 +418,11 @@ class MainActivity : Activity() {
             val mid = LinearLayout(this)
             mid.orientation = LinearLayout.VERTICAL
             mid.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            mid.addView(text(s.name, 15f, FG, true))
+            mid.addView(text(s.name, 15f, if (s.pinned) FG else MUTED, s.pinned))
             mid.addView(text(
-                String.format(Locale.US, "%.4f, %.4f  -  %.0f m", s.lat, s.lng, s.radius),
+                if (s.pinned)
+                    String.format(Locale.US, "%.4f, %.4f  -  %.0f m", s.lat, s.lng, s.radius)
+                else "not pinned yet - visit it and tap Add site",
                 11.5f, MUTED
             ))
             row.addView(mid)
@@ -469,13 +540,35 @@ class MainActivity : Activity() {
 
     /** Naming a stop creates a 500 m site, so the name sticks next time. */
     private fun nameDialog(s: Stop) {
+        val waiting = store.pending()
+        if (s.name.isBlank() && waiting.isNotEmpty()) {
+            val names = waiting.map { it.name }.toMutableList()
+            names.add("Type a new name...")
+            dialog()
+                .setTitle("Which site is this?")
+                .setItems(names.toTypedArray()) { _, which ->
+                    if (which < waiting.size) {
+                        store.addSite(waiting[which].name, s.lat, s.lng)
+                        render()
+                    } else {
+                        typeStopName(s)
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+        typeStopName(s)
+    }
+
+    private fun typeStopName(s: Stop) {
         val input = styledInput(s.name, "e.g. Jotun Dammam 2")
         dialog()
             .setTitle("Name this place")
             .setMessage(
                 Fmt.hhmm(s.start) + " - " + Fmt.hhmm(s.end) + "\n" +
                     String.format(Locale.US, "%.4f, %.4f", s.lat, s.lng) +
-                    "\nSaved as a site covering 500 m."
+                    "\nSaved as a site covering 150 m. Change that in the Sites tab."
             )
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
@@ -488,16 +581,39 @@ class MainActivity : Activity() {
     }
 
     private fun editSite(s: Site, box: LinearLayout) {
-        val input = styledInput(s.name, "Site name")
+        val nameIn = styledInput(s.name, "Site name")
+        val radiusIn = styledInput(
+            String.format(Locale.US, "%.0f", s.radius), "Radius in metres"
+        )
+        radiusIn.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+
+        val wrap = LinearLayout(this)
+        wrap.orientation = LinearLayout.VERTICAL
+        wrap.addView(nameIn)
+        wrap.addView(radiusIn)
+        val hint = text(
+            "Radius is how far from the pin still counts as this site. " +
+                "150 m suits a tower or an office. Use 400-600 m for a large plant.",
+            11.5f, MUTED
+        )
+        hint.setPadding(dp(22), dp(6), dp(22), 0)
+        wrap.addView(hint)
+
         dialog()
-            .setTitle("Rename site")
-            .setMessage(String.format(Locale.US, "%.4f, %.4f", s.lat, s.lng))
-            .setView(input)
+            .setTitle(if (s.pinned) "Edit site" else "Rename site")
+            .setMessage(
+                if (s.pinned) String.format(Locale.US, "%.4f, %.4f", s.lat, s.lng)
+                else "Not pinned yet - visit it and tap Add site at my location."
+            )
+            .setView(wrap)
             .setPositiveButton("Save") { _, _ ->
-                val v = input.text.toString().trim()
-                if (v.isNotBlank()) {
-                    val list = store.sites()
-                    list.firstOrNull { it.id == s.id }?.name = v
+                val v = nameIn.text.toString().trim()
+                val r = radiusIn.text.toString().trim().toDoubleOrNull()
+                val list = store.sites()
+                val target = list.firstOrNull { it.id == s.id }
+                if (target != null) {
+                    if (v.isNotBlank()) target.name = v
+                    if (r != null && r >= 30 && r <= 5000) target.radius = r
                     store.saveSites(list)
                     fillSiteList(box)
                 }
@@ -525,12 +641,36 @@ class MainActivity : Activity() {
             return
         }
         val last = fixes[fixes.size - 1]
+
+        val waiting = store.pending()
+        if (waiting.isNotEmpty()) {
+            val names = waiting.map { it.name }.toMutableList()
+            names.add("Type a new name...")
+            dialog()
+                .setTitle("Which site is this?")
+                .setItems(names.toTypedArray()) { _, which ->
+                    if (which < waiting.size) {
+                        store.addSite(waiting[which].name, last.lat, last.lng)
+                        toast(waiting[which].name + " pinned here")
+                        render()
+                    } else {
+                        typeNewSite(last)
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+        typeNewSite(last)
+    }
+
+    private fun typeNewSite(last: Fix) {
         val input = styledInput("", "Site name")
         dialog()
             .setTitle("Add site here")
             .setMessage(
                 String.format(Locale.US, "%.4f, %.4f", last.lat, last.lng) +
-                    "\nCovers 500 m around this point."
+                    "\nCovers 150 m. Widen it later in the Sites tab."
             )
             .setView(input)
             .setPositiveButton("Add") { _, _ ->
@@ -547,6 +687,7 @@ class MainActivity : Activity() {
     // ---------------- site import ----------------
 
     private val REQ_IMPORT = 20
+    private val REQ_RESTORE = 21
 
     private fun importSites() {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -561,8 +702,23 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_IMPORT || resultCode != RESULT_OK) return
+        if (resultCode != RESULT_OK) return
         val uri = data?.data ?: return
+
+        if (requestCode == REQ_RESTORE) {
+            try {
+                val text = contentResolver.openInputStream(uri)
+                    ?.bufferedReader()?.use { it.readText() } ?: return
+                val msg = Backup.restore(store, text)
+                dialog().setTitle("Restore").setMessage(msg)
+                    .setPositiveButton("OK", null).show()
+                render()
+            } catch (e: Exception) {
+                toast("Could not read that backup.")
+            }
+            return
+        }
+        if (requestCode != REQ_IMPORT) return
         var added = 0
         var skipped = 0
         try {
@@ -571,14 +727,20 @@ class MainActivity : Activity() {
                     val line = raw.trim()
                     if (line.isEmpty()) continue
                     val parts = line.split(",")
-                    if (parts.size < 3) { skipped++; continue }
-                    val lat = parts[parts.size - 2].trim().toDoubleOrNull()
-                    val lng = parts[parts.size - 1].trim().toDoubleOrNull()
-                    val nm = parts.subList(0, parts.size - 2).joinToString(",").trim()
-                    if (lat == null || lng == null || nm.isBlank()) { skipped++; continue }
-                    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) { skipped++; continue }
-                    store.addSite(nm, lat, lng)
-                    added++
+                    val lat = if (parts.size >= 3) parts[parts.size - 2].trim().toDoubleOrNull() else null
+                    val lng = if (parts.size >= 3) parts[parts.size - 1].trim().toDoubleOrNull() else null
+
+                    if (lat != null && lng != null &&
+                        lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+                    ) {
+                        val nm = parts.subList(0, parts.size - 2).joinToString(",").trim()
+                        if (nm.isBlank()) { skipped++; continue }
+                        store.addSite(nm, lat, lng)
+                        added++
+                    } else {
+                        // no coordinates on this line - keep the name and pin it later
+                        if (store.addPending(line)) added++ else skipped++
+                    }
                 }
             }
             toast("$added sites added" + if (skipped > 0) ", $skipped lines skipped" else "")
@@ -693,25 +855,33 @@ class MainActivity : Activity() {
         write(Xlsx.build(rows, "Daylog history"), "daylog_history.xlsx")
     }
 
+    private fun writeFile(
+        bytes: ByteArray, filename: String, mime: String, subFolder: String
+    ): android.net.Uri? {
+        val values = ContentValues()
+        values.put(MediaStore.Downloads.DISPLAY_NAME, filename)
+        values.put(MediaStore.Downloads.MIME_TYPE, mime)
+        values.put(
+            MediaStore.Downloads.RELATIVE_PATH,
+            Environment.DIRECTORY_DOWNLOADS + "/Daylog/" + subFolder
+        )
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: return null
+        contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+        return uri
+    }
+
     private fun write(bytes: ByteArray, filename: String) {
         try {
-            val values = ContentValues()
-            values.put(MediaStore.Downloads.DISPLAY_NAME, filename)
-            values.put(
-                MediaStore.Downloads.MIME_TYPE,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            val uri = writeFile(
+                bytes, filename,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Reports"
             )
-            values.put(
-                MediaStore.Downloads.RELATIVE_PATH,
-                Environment.DIRECTORY_DOWNLOADS + "/Daylog"
-            )
-            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
             if (uri == null) { toast("Could not create the file."); return }
-            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
 
             dialog()
                 .setTitle("Saved")
-                .setMessage("Downloads/Daylog/$filename")
+                .setMessage("Downloads/Daylog/Reports/$filename")
                 .setPositiveButton("Share") { _, _ ->
                     val send = Intent(Intent.ACTION_SEND)
                     send.type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
